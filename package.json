@@ -1,18 +1,23 @@
 {
-  "name": "html-css",
-  "version": "1.0.0",
-  "description": "A template for HTML and CSS",
+  "name": "cirkelgen",
+  "version": "2.0.0",
+  "description": "Interactive radial chart visualization with animations",
   "main": "index.html",
   "scripts": {
     "start": "serve"
   },
   "keywords": [
-    "html",
-    "css"
+    "chart",
+    "radial",
+    "visualization",
+    "konva"
   ],
   "author": "Ives van Hoorne",
   "license": "MIT",
   "devDependencies": {
     "serve": "11.2.0"
+  },
+  "dependencies": {
+    "konva": "^9.3.6"
   }
 }

@@ -1,659 +1,618 @@
 /**
- * Cirkelgen - Radial Chart Visualization Tool
+ * Cirkelgen - Radial Chart Visualization with Konva.js
  *
- * This module renders an interactive multi-layered circular chart that displays
- * performance data across 6 categories, each with 4 concentric rings (tiers).
- *
- * The chart visualizes three types of data:
- * - Scores: Primary metric values (0-4 scale, shown in blue gradient)
- * - Benchmarks: Target/comparison values (shown in orange)
- * - Averages: Average indicators with protruding ends (shown in yellow)
- *
- * Architecture:
- * - Uses HTML5 Canvas for rendering at high resolution (6x scale)
- * - CSS scales canvas down for display while maintaining crisp exports
- * - SVG overlay provides category labels
- *
- * Data Flow:
- * User Input -> Event Listeners -> updateChart() -> getValues() -> drawChart() -> Canvas
+ * Interactive animated radial chart displaying performance data across 6 categories.
+ * Features: flower bloom animation, hover tooltips, layered rendering.
  */
 
 // =============================================================================
-// GLOBAL CONFIGURATION
+// CONFIGURATION
 // =============================================================================
 
-/**
- * Rendering scale factor for high-resolution canvas.
- * Canvas is rendered at 6x display size for crisp visuals and exports.
- */
-const scale = 6;
+const CONFIG = {
+  // Display settings
+  displaySize: 500,
 
-/** Display size of the chart in CSS pixels */
-const displaySize = 500;
+  // Chart geometry
+  totalLayers: 67,
+  centerHole: 18,
+  ringThickness: 10,
+  gapThickness: 3,
+  sliceGapThickness: 3,
+  numCategories: 6,
+  numTiers: 4,
 
-/** Actual canvas size in pixels (displaySize * scale for high-DPI rendering) */
-const canvasSize = displaySize * scale;
+  // Colors
+  backgroundColors: ['#F2F2F2', '#e6e6e6', '#cccccc', '#999999'],
+  scoreColors: ['#CEE5DA', '#6EC5CD', '#076C98', '#182E57'],
+  benchmarkColor: '#F47B54',
+  averageColor: '#FFFF00',
+  averageStrokeColor: '#444444',
 
-/** Scale factor for PNG exports (2x for even higher resolution output) */
-const exportScale = 2;
+  // Animation
+  animationDuration: 1200,
+  staggerDelay: 80,
 
-// =============================================================================
-// CANVAS SETUP
-// =============================================================================
-
-/**
- * Initialize canvas with high-resolution rendering.
- * The canvas is sized larger than display to enable sharp rendering,
- * then scaled down via CSS for display.
- */
-const canvas = document.getElementById("radialChart");
-canvas.width = canvasSize;
-canvas.height = canvasSize;
-canvas.style.width = `${displaySize}px`;
-canvas.style.height = `${displaySize}px`;
-
-/** 2D rendering context with transparency enabled */
-const ctx = canvas.getContext("2d", { alpha: true });
-ctx.clearRect(0, 0, canvasSize, canvasSize);
-
-// =============================================================================
-// CHART GEOMETRY CONSTANTS
-// =============================================================================
-
-/** Center X coordinate of the chart (canvas center) */
-const centerX = canvasSize / 2;
-
-/** Center Y coordinate of the chart (canvas center) */
-const centerY = canvasSize / 2;
-
-/**
- * Total number of radial layers in the chart geometry.
- * Calculated as: centerHole + (4 rings × ringThickness) + (3 gaps × gapThickness)
- * This determines the granularity of the radial divisions.
- */
-const totalLayers = 67;
-
-/**
- * Number of layers reserved for the empty center hole.
- * Creates the "donut" shape of the chart.
- */
-const centerHole = 18;
-
-/**
- * Thickness of each data ring in layer units.
- * Each of the 4 tiers spans this many layers.
- */
-const ringThickness = 10;
-
-/**
- * Thickness of gaps between rings in layer units.
- * Creates visual separation between the 4 tiers.
- */
-const gapThickness = 3;
-
-/**
- * Thickness of gaps between the 6 category slices in layer units.
- * Creates visual separation between category wedges.
- */
-const sliceGapThickness = 3;
+  // Category labels (Dutch)
+  categoryLabels: [
+    'klimaat',
+    'leiderschap',
+    'strategie en\nmanagement',
+    'HR management',
+    'communicatie',
+    'kennis en\nvaardigheden'
+  ]
+};
 
 // =============================================================================
-// COLOR DEFINITIONS
+// STATE
 // =============================================================================
 
-/**
- * Background colors for the 4 ring tiers (grayscale gradient).
- * Index 0 = outermost/lightest, Index 3 = innermost/darkest
- */
-const colors = ["#F2F2F2", "#e6e6e6", "#cccccc", "#999999"];
-
-/**
- * Score fill colors for the 4 ring tiers (blue gradient).
- * Represents filled portions based on score values.
- * Index 0 = tier 1 (0-1), Index 3 = tier 4 (3-4)
- */
-const blueColors = ["#CEE5DA", "#6EC5CD", "#076C98", "#182E57"];
-
-/** Color for benchmark indicators (orange) */
-const benchmarkColor = "#F47B54";
-
-/** Fill color for average indicators (yellow) */
-const averageColor = "#FFFF00";
-
-/** Stroke/outline color for average indicators (dark gray) */
-const averageStrokeColor = "#444444";
-
-// =============================================================================
-// VISIBILITY STATE FLAGS
-// =============================================================================
-
-/** Whether to display benchmark overlay on the chart */
+let stage, backgroundLayer, scoreLayer, benchmarkLayer, averageLayer, labelLayer, tooltipLayer;
+let tooltip;
 let showBenchmark = true;
-
-/** Whether to display average indicators on the chart */
 let showAverage = true;
-
-/** Whether to display numeric score values on the chart */
 let showValues = false;
+let isAnimating = false;
 
-/** Vertical offset for SVG overlay positioning (in pixels) */
-let svgVerticalOffset = 10;
-
-// =============================================================================
-// VALUE LABEL CUSTOMIZATION
-// =============================================================================
-
-/** Angular offset for value labels in degrees (rotates all labels around center) */
+// Value label customization
 let valueAngleOffset = 0;
-
-/** Font size for value labels in pixels */
-let valueFontSize = 60;
-
-/** Distance of value labels from center as percentage of default position */
+let valueFontSize = 14;
 let valueDistancePercent = 100;
 
 // =============================================================================
-// UTILITY FUNCTIONS
+// INITIALIZATION
 // =============================================================================
 
-/**
- * Loads an SVG file as an Image object for canvas rendering.
- *
- * @param {string} url - Path to the SVG file
- * @returns {Promise<HTMLImageElement>} Promise resolving to loaded image
- */
-function loadSVG(url) {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.onload = () => resolve(img);
-    img.onerror = reject;
-    img.src = url;
+function initKonva() {
+  const container = document.getElementById('chart-container');
+
+  stage = new Konva.Stage({
+    container: 'chart-container',
+    width: CONFIG.displaySize,
+    height: CONFIG.displaySize
   });
+
+  // Create layers in render order (bottom to top)
+  backgroundLayer = new Konva.Layer();
+  benchmarkLayer = new Konva.Layer();
+  scoreLayer = new Konva.Layer();
+  averageLayer = new Konva.Layer();
+  labelLayer = new Konva.Layer();
+  tooltipLayer = new Konva.Layer();
+
+  stage.add(backgroundLayer);
+  stage.add(benchmarkLayer);
+  stage.add(scoreLayer);
+  stage.add(averageLayer);
+  stage.add(labelLayer);
+  stage.add(tooltipLayer);
+
+  // Create tooltip
+  createTooltip();
+}
+
+function createTooltip() {
+  const tooltipGroup = new Konva.Group({
+    visible: false
+  });
+
+  const tooltipBg = new Konva.Rect({
+    fill: 'rgba(0, 0, 0, 0.85)',
+    cornerRadius: 6,
+    padding: 10
+  });
+
+  const tooltipText = new Konva.Text({
+    text: '',
+    fontSize: 14,
+    fontFamily: 'Arial',
+    fill: 'white',
+    padding: 8
+  });
+
+  tooltipGroup.add(tooltipBg);
+  tooltipGroup.add(tooltipText);
+  tooltipLayer.add(tooltipGroup);
+
+  tooltip = {
+    group: tooltipGroup,
+    bg: tooltipBg,
+    text: tooltipText
+  };
+}
+
+function showTooltip(category, tier, value, type, x, y) {
+  const label = CONFIG.categoryLabels[category].replace('\n', ' ');
+  const tierLabel = `Ring ${tier + 1}`;
+  const typeLabel = type === 'score' ? 'Score' : type === 'benchmark' ? 'Benchmark' : 'Average';
+
+  tooltip.text.text(`${label}\n${tierLabel}: ${value.toFixed(1)} (${typeLabel})`);
+
+  const textWidth = tooltip.text.width();
+  const textHeight = tooltip.text.height();
+
+  tooltip.bg.width(textWidth);
+  tooltip.bg.height(textHeight);
+
+  // Position tooltip, keeping it within bounds
+  let tooltipX = x + 15;
+  let tooltipY = y - textHeight / 2;
+
+  if (tooltipX + textWidth > CONFIG.displaySize) {
+    tooltipX = x - textWidth - 15;
+  }
+  if (tooltipY < 0) {
+    tooltipY = 5;
+  }
+  if (tooltipY + textHeight > CONFIG.displaySize) {
+    tooltipY = CONFIG.displaySize - textHeight - 5;
+  }
+
+  tooltip.group.position({ x: tooltipX, y: tooltipY });
+  tooltip.group.visible(true);
+  tooltipLayer.batchDraw();
+}
+
+function hideTooltip() {
+  tooltip.group.visible(false);
+  tooltipLayer.batchDraw();
 }
 
 // =============================================================================
-// DRAWING PRIMITIVES
+// GEOMETRY HELPERS
 // =============================================================================
 
-/**
- * Draws a wedge-shaped segment (arc with thickness) on the canvas.
- * Used for rendering ring sections for background, scores, and benchmarks.
- *
- * The segment is drawn as a closed path:
- * 1. Move to start point on inner arc
- * 2. Draw outer arc from start to end angle
- * 3. Line to end point on inner arc
- * 4. Draw inner arc back to start (counter-clockwise)
- *
- * @param {CanvasRenderingContext2D} ctx - Canvas rendering context
- * @param {number} centerX - X coordinate of chart center
- * @param {number} centerY - Y coordinate of chart center
- * @param {number} startRadius - Inner radius of the segment
- * @param {number} endRadius - Outer radius of the segment
- * @param {number} startAngle - Starting angle in radians
- * @param {number} endAngle - Ending angle in radians
- * @param {string} color - Fill color for the segment
- */
-function drawSegment(
-  ctx,
-  centerX,
-  centerY,
-  startRadius,
-  endRadius,
-  startAngle,
-  endAngle,
-  color
-) {
-  ctx.fillStyle = color;
-  ctx.beginPath();
-  // Start at inner radius, start angle
-  ctx.moveTo(
-    centerX + startRadius * Math.cos(startAngle),
-    centerY + startRadius * Math.sin(startAngle)
-  );
-  // Draw outer arc
-  ctx.arc(centerX, centerY, endRadius, startAngle, endAngle);
-  // Line to inner radius at end angle
-  ctx.lineTo(
-    centerX + startRadius * Math.cos(endAngle),
-    centerY + startRadius * Math.sin(endAngle)
-  );
-  // Draw inner arc back (counter-clockwise)
-  ctx.arc(centerX, centerY, startRadius, endAngle, startAngle, true);
-  ctx.closePath();
-  ctx.fill();
+function getChartGeometry() {
+  const centerX = CONFIG.displaySize / 2;
+  const centerY = CONFIG.displaySize / 2;
+  const maxRadius = (CONFIG.displaySize / 2) * 0.8;
+  const layerThickness = maxRadius / CONFIG.totalLayers;
+  const sliceAngle = (Math.PI * 2) / CONFIG.numCategories;
+  const rotationAngle = -Math.PI / 2; // Start at top
+
+  return { centerX, centerY, maxRadius, layerThickness, sliceAngle, rotationAngle };
 }
 
-/**
- * Draws a radial gap line to separate category slices.
- * Uses canvas composite operation "destination-out" to cut through existing drawings.
- *
- * @param {CanvasRenderingContext2D} ctx - Canvas rendering context
- * @param {number} centerX - X coordinate of chart center
- * @param {number} centerY - Y coordinate of chart center
- * @param {number} angle - Angle of the gap line in radians
- * @param {number} width - Width of the gap
- * @param {number} length - Length of the gap (extends from center outward)
- */
-function drawGap(ctx, centerX, centerY, angle, width, length) {
-  ctx.save();
-  ctx.translate(centerX, centerY);
-  ctx.rotate(angle);
-  // "destination-out" removes existing pixels where the rectangle is drawn
-  ctx.globalCompositeOperation = "destination-out";
-  ctx.fillRect(-width / 2, 0, width, length);
-  ctx.restore();
+function getRingBounds(tierIndex, layerThickness) {
+  const startRadius = (CONFIG.centerHole + tierIndex * (CONFIG.ringThickness + CONFIG.gapThickness)) * layerThickness;
+  const endRadius = startRadius + CONFIG.ringThickness * layerThickness;
+  return { startRadius, endRadius };
 }
 
-/**
- * Calculates geometry for an average indicator with protruding circular ends.
- *
- * The average indicator is a pill-shaped marker that shows where the average
- * value falls within a ring. It consists of:
- * - Two circular end caps that protrude beyond the ring edges
- * - A connecting arc section
- *
- * Mathematical approach:
- * 1. Calculate base ring position from layer index
- * 2. Add thickness increase (20%) for visual prominence
- * 3. Calculate protrusion distance and angular extent using arcsin
- * 4. Return geometry data for rendering
- *
- * @param {number} centerX - X coordinate of chart center
- * @param {number} centerY - Y coordinate of chart center
- * @param {number} layerIndex - Which radial layer the indicator sits on
- * @param {number} startAngle - Start angle of the category slice in radians
- * @param {number} endAngle - End angle of the category slice in radians
- * @param {number} layerThickness - Thickness of one layer in pixels
- * @returns {Object} Geometry data containing:
- *   - startCircle: {x, y, radius} for the start cap
- *   - endCircle: {x, y, radius} for the end cap
- *   - mainShape: Arc geometry for the main body
- *   - protrusions: Extended arc geometry including protrusions
- *   - strokeWidth: Width for outline strokes
- */
-function drawAverageLayer(
-  centerX,
-  centerY,
-  layerIndex,
-  startAngle,
-  endAngle,
-  layerThickness
-) {
-  // Calculate base ring boundaries
-  const baseStartRadius = layerIndex * layerThickness;
-  const baseEndRadius = baseStartRadius + layerThickness;
-  const midRadius = (baseStartRadius + baseEndRadius) / 2;
-
-  // Calculate protrusion geometry
-  // The circular end caps extend 10 scaled units beyond the slice boundaries
-  const protrusion = 10 * scale;
-  // Use arcsin to convert linear protrusion to angular measure at midRadius
-  const protrusionAngle = Math.asin(protrusion / midRadius);
-
-  // Position indicator at center of the slice, with protrusions extending beyond
-  const midAngle = (startAngle + endAngle) / 2;
-  const newStartAngle = midAngle - protrusionAngle;
-  const newEndAngle = midAngle + protrusionAngle;
-
-  // Expand thickness by 20% for visual prominence
-  const thicknessIncrease = layerThickness * 1.2;
-  const startRadius = baseStartRadius - thicknessIncrease / 2;
-  const endRadius = baseEndRadius + thicknessIncrease / 2;
-
-  // Stroke width scales with overall scale factor
-  const strokeWidth = 7 * scale;
-  // Circle radius fills the expanded ring thickness
-  const circleRadius = (endRadius - startRadius) / 2;
-
-  // Calculate center positions for the circular end caps
-  const startCircleX = centerX + midRadius * Math.cos(newStartAngle);
-  const startCircleY = centerY + midRadius * Math.sin(newStartAngle);
-  const endCircleX = centerX + midRadius * Math.cos(newEndAngle);
-  const endCircleY = centerY + midRadius * Math.sin(newEndAngle);
-
-  return {
-    startCircle: { x: startCircleX, y: startCircleY, radius: circleRadius },
-    endCircle: { x: endCircleX, y: endCircleY, radius: circleRadius },
-    mainShape: {
-      startRadius,
-      endRadius,
-      // Clamp to slice boundaries for main shape
-      startAngle: Math.max(startAngle, newStartAngle),
-      endAngle: Math.min(endAngle, newEndAngle),
-    },
-    protrusions: {
-      startRadius: startRadius,
-      endRadius: endRadius,
-      startAngle: newStartAngle,
-      endAngle: newEndAngle,
-    },
-    strokeWidth,
+function createArcPath(centerX, centerY, innerRadius, outerRadius, startAngle, endAngle) {
+  // Create a wedge shape using sceneFunc
+  return function(context, shape) {
+    context.beginPath();
+    context.arc(centerX, centerY, outerRadius, startAngle, endAngle);
+    context.arc(centerX, centerY, innerRadius, endAngle, startAngle, true);
+    context.closePath();
+    context.fillStrokeShape(shape);
   };
 }
 
 // =============================================================================
-// MAIN CHART RENDERING
+// DRAWING FUNCTIONS
 // =============================================================================
 
-/**
- * Main chart rendering function. Draws the complete radial chart including:
- * - Background rings for all 6 categories × 4 tiers
- * - Benchmark overlays (if enabled)
- * - Score fills with blue gradient
- * - Average indicators (if enabled)
- * - Radial gap lines between categories
- * - Numeric value labels (if enabled)
- * - SVG overlay with category labels
- *
- * Rendering order is important:
- * 1. Background rings (gray)
- * 2. Benchmark fills (orange) - drawn under scores
- * 3. Score fills (blue gradient) - drawn over benchmarks
- * 4. Average indicators (yellow with outline)
- * 5. Gap lines (cut through everything)
- * 6. Value labels (on top)
- * 7. SVG overlay (topmost layer)
- *
- * @param {CanvasRenderingContext2D} ctx - Canvas rendering context
- * @param {number} canvasWidth - Width of the canvas in pixels
- * @param {number} canvasHeight - Height of the canvas in pixels
- * @param {number[]} scores - Array of 6 score values (0-4 each)
- * @param {number[]} benchmarks - Array of 6 benchmark values (0-4 each)
- * @param {number[]} averages - Array of 6 average values (0-4 each)
- */
-async function drawChart(
-  ctx,
-  canvasWidth,
-  canvasHeight,
-  scores,
-  benchmarks,
-  averages
-) {
-  const centerX = canvasWidth / 2;
-  const centerY = canvasHeight / 2;
-  // Maximum radius is 80% of half the canvas width
-  const maxRadius = (canvasWidth / 2) * 0.8;
-  // Calculate pixel thickness per layer
-  const layerThickness = maxRadius / totalLayers;
+function drawBackground() {
+  backgroundLayer.destroyChildren();
 
-  // Clear canvas for fresh render
-  ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+  const { centerX, centerY, layerThickness, sliceAngle, rotationAngle } = getChartGeometry();
 
-  // Each of the 6 categories gets 1/6 of the circle (60 degrees)
-  const sliceAngle = (Math.PI * 2) / 6;
-  // Rotate chart so first category starts at top (-90 degrees)
-  const rotationAngle = -Math.PI / 2;
-
-  // Collect average indicator geometry for batch rendering later
-  const averageIndicators = [];
-
-  // ---------------------------------------------------------------------
-  // PASS 1: Draw rings, benchmarks, scores for each category
-  // ---------------------------------------------------------------------
-  for (let category = 0; category < 6; category++) {
+  for (let category = 0; category < CONFIG.numCategories; category++) {
     const startAngle = category * sliceAngle + rotationAngle;
     const endAngle = (category + 1) * sliceAngle + rotationAngle;
 
-    // Draw 4 tiers (rings) for this category
-    for (let i = 0; i < 4; i++) {
-      // Calculate ring boundaries accounting for gaps between rings
-      const startRadius =
-        (centerHole + i * (ringThickness + gapThickness)) * layerThickness;
-      const endRadius = startRadius + ringThickness * layerThickness;
+    for (let tier = 0; tier < CONFIG.numTiers; tier++) {
+      const { startRadius, endRadius } = getRingBounds(tier, layerThickness);
 
-      // Draw background ring (gray)
-      drawSegment(
-        ctx,
-        centerX,
-        centerY,
-        startRadius,
-        endRadius,
-        startAngle,
-        endAngle,
-        colors[i]
-      );
+      const segment = new Konva.Shape({
+        sceneFunc: createArcPath(centerX, centerY, startRadius, endRadius, startAngle, endAngle),
+        fill: CONFIG.backgroundColors[tier]
+      });
 
-      // Draw benchmark fill if enabled
-      if (showBenchmark) {
-        const benchmark = benchmarks[category];
-        // Calculate how many sub-layers to fill (each ring has 10 sub-layers)
-        // Formula: (benchmark * 10) gives total filled layers, subtract (i * 10) for previous rings
-        const benchmarkLayersFilled = Math.max(
-          0,
-          Math.min(10, Math.floor(benchmark * 10) - i * 10)
-        );
-        if (benchmarkLayersFilled > 0) {
-          const filledEndRadius =
-            startRadius +
-            (endRadius - startRadius) * (benchmarkLayersFilled / 10);
-          drawSegment(
-            ctx,
-            centerX,
-            centerY,
-            startRadius,
-            filledEndRadius,
-            startAngle,
-            endAngle,
-            benchmarkColor
-          );
-        }
-      }
-
-      // Draw score fill (always visible, draws over benchmark)
-      const score = scores[category];
-      const scoreLayersFilled = Math.max(
-        0,
-        Math.min(10, Math.floor(score * 10) - i * 10)
-      );
-      if (scoreLayersFilled > 0) {
-        const filledEndRadius =
-          startRadius + (endRadius - startRadius) * (scoreLayersFilled / 10);
-        drawSegment(
-          ctx,
-          centerX,
-          centerY,
-          startRadius,
-          filledEndRadius,
-          startAngle,
-          endAngle,
-          blueColors[i]
-        );
-      }
-    }
-
-    // Calculate average indicator geometry if enabled
-    if (showAverage) {
-      const average = averages[category];
-      // Convert average value (0-4) to layer index (0-39)
-      const averageLayer = Math.floor(average * 10) - 1;
-      if (averageLayer >= 0) {
-        // Determine which tier (0-3) and position within tier (0-9)
-        const tierIndex = Math.floor(averageLayer / 10);
-        const layerWithinTier = averageLayer % 10;
-        const indicatorData = drawAverageLayer(
-          centerX,
-          centerY,
-          // Calculate actual layer index including center hole and gaps
-          centerHole +
-            tierIndex * (ringThickness + gapThickness) +
-            layerWithinTier,
-          startAngle,
-          endAngle,
-          layerThickness
-        );
-        averageIndicators.push(indicatorData);
-      }
+      backgroundLayer.add(segment);
     }
   }
 
-  // ---------------------------------------------------------------------
-  // PASS 2: Draw all average indicators
-  // ---------------------------------------------------------------------
-  if (showAverage) {
-    averageIndicators.forEach((indicator) => {
-      /**
-       * Helper to draw a filled and stroked circle for indicator end caps.
-       * @param {number} x - Center X
-       * @param {number} y - Center Y
-       * @param {number} radius - Circle radius
-       */
-      function drawFullCircle(x, y, radius) {
-        ctx.beginPath();
-        ctx.arc(x, y, radius, 0, 2 * Math.PI);
-        ctx.fillStyle = averageColor;
-        ctx.fill();
-        ctx.strokeStyle = averageStrokeColor;
-        ctx.lineWidth = indicator.strokeWidth;
-        ctx.stroke();
-      }
+  // Draw gap lines
+  drawGapLines(backgroundLayer);
+  backgroundLayer.batchDraw();
+}
 
-      // Draw circular end caps
-      drawFullCircle(
-        indicator.startCircle.x,
-        indicator.startCircle.y,
-        indicator.startCircle.radius
-      );
-      drawFullCircle(
-        indicator.endCircle.x,
-        indicator.endCircle.y,
-        indicator.endCircle.radius
-      );
+function drawGapLines(layer) {
+  const { centerX, centerY, maxRadius, sliceAngle, rotationAngle } = getChartGeometry();
 
-      // Draw protrusion arc (extends beyond slice boundaries)
-      ctx.fillStyle = averageColor;
-      ctx.beginPath();
-      ctx.arc(
-        centerX,
-        centerY,
-        indicator.protrusions.endRadius,
-        indicator.protrusions.startAngle,
-        indicator.protrusions.endAngle
-      );
-      ctx.arc(
-        centerX,
-        centerY,
-        indicator.protrusions.startRadius,
-        indicator.protrusions.endAngle,
-        indicator.protrusions.startAngle,
-        true
-      );
-      ctx.closePath();
-      ctx.fill();
+  for (let i = 0; i < CONFIG.numCategories; i++) {
+    const angle = i * sliceAngle + rotationAngle;
 
-      // Draw main arc body (clipped to slice boundaries)
-      ctx.beginPath();
-      ctx.arc(
+    const gap = new Konva.Line({
+      points: [
         centerX,
         centerY,
-        indicator.mainShape.endRadius,
-        indicator.mainShape.startAngle,
-        indicator.mainShape.endAngle
-      );
-      ctx.arc(
-        centerX,
-        centerY,
-        indicator.mainShape.startRadius,
-        indicator.mainShape.endAngle,
-        indicator.mainShape.startAngle,
-        true
-      );
-      ctx.closePath();
-      ctx.fill();
-
-      // Draw outline strokes on outer and inner arcs
-      ctx.strokeStyle = averageStrokeColor;
-      ctx.lineWidth = indicator.strokeWidth;
-      // Outer arc stroke
-      ctx.beginPath();
-      ctx.arc(
-        centerX,
-        centerY,
-        indicator.protrusions.endRadius,
-        indicator.protrusions.startAngle,
-        indicator.protrusions.endAngle
-      );
-      ctx.stroke();
-      // Inner arc stroke
-      ctx.beginPath();
-      ctx.arc(
-        centerX,
-        centerY,
-        indicator.protrusions.startRadius,
-        indicator.protrusions.endAngle,
-        indicator.protrusions.startAngle,
-        true
-      );
-      ctx.stroke();
+        centerX + Math.cos(angle) * (maxRadius + 20),
+        centerY + Math.sin(angle) * (maxRadius + 20)
+      ],
+      stroke: 'white',
+      strokeWidth: CONFIG.sliceGapThickness * 3
     });
+
+    layer.add(gap);
   }
+}
 
-  // ---------------------------------------------------------------------
-  // PASS 3: Draw radial gaps between category slices
-  // ---------------------------------------------------------------------
-  // Gaps are drawn last with "destination-out" to cut through all previous layers
-  for (let i = 0; i < 6; i++) {
-    // Calculate gap angle (offset by 90 degrees from slice boundaries)
-    const angle = i * sliceAngle + rotationAngle - Math.PI / 2;
-    drawGap(
-      ctx,
-      centerX,
-      centerY,
-      angle,
-      sliceGapThickness * layerThickness,
-      maxRadius + 10 * layerThickness // Extend slightly beyond chart edge
-    );
-  }
+function drawScores(scores, animationProgress = 1) {
+  scoreLayer.destroyChildren();
 
-  // ---------------------------------------------------------------------
-  // PASS 4: Draw numeric value labels
-  // ---------------------------------------------------------------------
-  if (showValues) {
-    // Position labels in the gap between 3rd and 4th rings
-    const thirdRingOuter = (centerHole + 3 * (ringThickness + gapThickness)) * layerThickness;
-    const fourthRingInner = (centerHole + 3 * (ringThickness + gapThickness) + gapThickness) * layerThickness;
-    let gapCenterRadius = (thirdRingOuter + fourthRingInner) / 2;
-    // Apply user-configurable distance percentage
-    gapCenterRadius = gapCenterRadius * (valueDistancePercent / 100);
+  const { centerX, centerY, layerThickness, sliceAngle, rotationAngle } = getChartGeometry();
 
-    ctx.font = `bold ${valueFontSize}px Arial`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
+  for (let category = 0; category < CONFIG.numCategories; category++) {
+    const startAngle = category * sliceAngle + rotationAngle;
+    const endAngle = (category + 1) * sliceAngle + rotationAngle;
+    const score = scores[category] * animationProgress;
 
-    for (let category = 0; category < 6; category++) {
-      // Calculate label position with user-configurable angle offset
-      const angle = category * sliceAngle + rotationAngle + (valueAngleOffset * Math.PI / 180);
-      const x = centerX + gapCenterRadius * Math.cos(angle);
-      const y = centerY + gapCenterRadius * Math.sin(angle);
-      const value = scores[category].toFixed(1);
+    for (let tier = 0; tier < CONFIG.numTiers; tier++) {
+      const { startRadius, endRadius } = getRingBounds(tier, layerThickness);
 
-      // Draw text with black outline for readability on any background
-      ctx.strokeStyle = 'black';
-      ctx.lineWidth = Math.max(2, valueFontSize / 8);
-      ctx.strokeText(value, x, y);
-      // Draw white fill on top
-      ctx.fillStyle = 'white';
-      ctx.fillText(value, x, y);
+      // Calculate filled portion for this tier
+      const layersFilled = Math.max(0, Math.min(10, Math.floor(score * 10) - tier * 10));
+
+      if (layersFilled > 0) {
+        const fillRatio = layersFilled / 10;
+        const filledEndRadius = startRadius + (endRadius - startRadius) * fillRatio;
+
+        const segment = new Konva.Shape({
+          sceneFunc: createArcPath(centerX, centerY, startRadius, filledEndRadius, startAngle, endAngle),
+          fill: CONFIG.scoreColors[tier],
+          // Store metadata for tooltip
+          category: category,
+          tier: tier,
+          value: scores[category],
+          type: 'score'
+        });
+
+        // Add hover events
+        segment.on('mouseenter', function(e) {
+          const shape = e.target;
+          document.body.style.cursor = 'pointer';
+          shape.opacity(0.8);
+          scoreLayer.batchDraw();
+
+          const pos = stage.getPointerPosition();
+          showTooltip(shape.attrs.category, shape.attrs.tier, shape.attrs.value, 'score', pos.x, pos.y);
+        });
+
+        segment.on('mouseleave', function(e) {
+          document.body.style.cursor = 'default';
+          e.target.opacity(1);
+          scoreLayer.batchDraw();
+          hideTooltip();
+        });
+
+        segment.on('mousemove', function(e) {
+          const pos = stage.getPointerPosition();
+          showTooltip(e.target.attrs.category, e.target.attrs.tier, e.target.attrs.value, 'score', pos.x, pos.y);
+        });
+
+        scoreLayer.add(segment);
+      }
     }
   }
 
-  // ---------------------------------------------------------------------
-  // PASS 5: Load and overlay SVG with category labels
-  // ---------------------------------------------------------------------
-  try {
-    const svgImage = await loadSVG("roundletters.svg");
+  // Draw gap lines on top
+  drawGapLines(scoreLayer);
+  scoreLayer.batchDraw();
+}
 
-    // Scale SVG to fit chart dimensions
-    const newSvgHeight = canvasHeight * 0.88;
-    const newSvgWidth = canvasWidth * 1.0;
+function drawBenchmarks(benchmarks, animationProgress = 1) {
+  benchmarkLayer.destroyChildren();
 
-    // Center SVG with vertical offset adjustment
-    const svgX = (canvasWidth - newSvgWidth) / 2;
-    const svgY = (canvasHeight - newSvgHeight) / 2 + svgVerticalOffset;
+  if (!showBenchmark) {
+    benchmarkLayer.batchDraw();
+    return;
+  }
 
-    ctx.drawImage(svgImage, svgX, svgY, newSvgWidth, newSvgHeight);
-  } catch (error) {
-    console.error("Error loading SVG:", error);
+  const { centerX, centerY, layerThickness, sliceAngle, rotationAngle } = getChartGeometry();
+
+  for (let category = 0; category < CONFIG.numCategories; category++) {
+    const startAngle = category * sliceAngle + rotationAngle;
+    const endAngle = (category + 1) * sliceAngle + rotationAngle;
+    const benchmark = benchmarks[category] * animationProgress;
+
+    for (let tier = 0; tier < CONFIG.numTiers; tier++) {
+      const { startRadius, endRadius } = getRingBounds(tier, layerThickness);
+
+      const layersFilled = Math.max(0, Math.min(10, Math.floor(benchmark * 10) - tier * 10));
+
+      if (layersFilled > 0) {
+        const fillRatio = layersFilled / 10;
+        const filledEndRadius = startRadius + (endRadius - startRadius) * fillRatio;
+
+        const segment = new Konva.Shape({
+          sceneFunc: createArcPath(centerX, centerY, startRadius, filledEndRadius, startAngle, endAngle),
+          fill: CONFIG.benchmarkColor,
+          category: category,
+          tier: tier,
+          value: benchmarks[category],
+          type: 'benchmark'
+        });
+
+        segment.on('mouseenter', function(e) {
+          const shape = e.target;
+          document.body.style.cursor = 'pointer';
+          shape.opacity(0.8);
+          benchmarkLayer.batchDraw();
+
+          const pos = stage.getPointerPosition();
+          showTooltip(shape.attrs.category, shape.attrs.tier, shape.attrs.value, 'benchmark', pos.x, pos.y);
+        });
+
+        segment.on('mouseleave', function(e) {
+          document.body.style.cursor = 'default';
+          e.target.opacity(1);
+          benchmarkLayer.batchDraw();
+          hideTooltip();
+        });
+
+        segment.on('mousemove', function(e) {
+          const pos = stage.getPointerPosition();
+          showTooltip(e.target.attrs.category, e.target.attrs.tier, e.target.attrs.value, 'benchmark', pos.x, pos.y);
+        });
+
+        benchmarkLayer.add(segment);
+      }
+    }
+  }
+
+  benchmarkLayer.batchDraw();
+}
+
+function drawAverages(averages, animationProgress = 1) {
+  averageLayer.destroyChildren();
+
+  if (!showAverage) {
+    averageLayer.batchDraw();
+    return;
+  }
+
+  const { centerX, centerY, layerThickness, sliceAngle, rotationAngle } = getChartGeometry();
+
+  for (let category = 0; category < CONFIG.numCategories; category++) {
+    const startAngle = category * sliceAngle + rotationAngle;
+    const endAngle = (category + 1) * sliceAngle + rotationAngle;
+    const average = averages[category];
+
+    if (average <= 0) continue;
+
+    // Calculate layer position
+    const averageLayer_idx = Math.floor(average * 10) - 1;
+    if (averageLayer_idx < 0) continue;
+
+    const tierIndex = Math.floor(averageLayer_idx / 10);
+    const layerWithinTier = averageLayer_idx % 10;
+    const actualLayer = CONFIG.centerHole + tierIndex * (CONFIG.ringThickness + CONFIG.gapThickness) + layerWithinTier;
+
+    // Calculate indicator geometry
+    const baseRadius = actualLayer * layerThickness;
+    const midRadius = baseRadius + layerThickness / 2;
+
+    // Pill-shaped indicator with circular end caps
+    const protrusion = 10;
+    const protrusionAngle = Math.asin(protrusion / midRadius);
+    const midAngle = (startAngle + endAngle) / 2;
+
+    // Animated position (grows from center)
+    const animatedRadius = midRadius * animationProgress;
+
+    if (animationProgress > 0.1) {
+      const circleRadius = layerThickness * 0.6;
+
+      // Start circle
+      const startCircle = new Konva.Circle({
+        x: centerX + animatedRadius * Math.cos(midAngle - protrusionAngle),
+        y: centerY + animatedRadius * Math.sin(midAngle - protrusionAngle),
+        radius: circleRadius * animationProgress,
+        fill: CONFIG.averageColor,
+        stroke: CONFIG.averageStrokeColor,
+        strokeWidth: 2,
+        category: category,
+        tier: tierIndex,
+        value: average,
+        type: 'average'
+      });
+
+      // End circle
+      const endCircle = new Konva.Circle({
+        x: centerX + animatedRadius * Math.cos(midAngle + protrusionAngle),
+        y: centerY + animatedRadius * Math.sin(midAngle + protrusionAngle),
+        radius: circleRadius * animationProgress,
+        fill: CONFIG.averageColor,
+        stroke: CONFIG.averageStrokeColor,
+        strokeWidth: 2
+      });
+
+      // Connecting arc
+      const arcShape = new Konva.Shape({
+        sceneFunc: function(context, shape) {
+          const innerR = animatedRadius - circleRadius * animationProgress;
+          const outerR = animatedRadius + circleRadius * animationProgress;
+
+          context.beginPath();
+          context.arc(centerX, centerY, outerR, midAngle - protrusionAngle, midAngle + protrusionAngle);
+          context.arc(centerX, centerY, innerR, midAngle + protrusionAngle, midAngle - protrusionAngle, true);
+          context.closePath();
+          context.fillStrokeShape(shape);
+        },
+        fill: CONFIG.averageColor,
+        stroke: CONFIG.averageStrokeColor,
+        strokeWidth: 2
+      });
+
+      // Add hover events to all parts
+      [startCircle, endCircle, arcShape].forEach(shape => {
+        shape.on('mouseenter', function(e) {
+          document.body.style.cursor = 'pointer';
+          const pos = stage.getPointerPosition();
+          showTooltip(category, tierIndex, average, 'average', pos.x, pos.y);
+        });
+
+        shape.on('mouseleave', function() {
+          document.body.style.cursor = 'default';
+          hideTooltip();
+        });
+
+        shape.on('mousemove', function() {
+          const pos = stage.getPointerPosition();
+          showTooltip(category, tierIndex, average, 'average', pos.x, pos.y);
+        });
+      });
+
+      averageLayer.add(arcShape);
+      averageLayer.add(startCircle);
+      averageLayer.add(endCircle);
+    }
+  }
+
+  averageLayer.batchDraw();
+}
+
+function drawLabels() {
+  labelLayer.destroyChildren();
+
+  const { centerX, centerY, maxRadius, sliceAngle, rotationAngle } = getChartGeometry();
+
+  for (let category = 0; category < CONFIG.numCategories; category++) {
+    const midAngle = category * sliceAngle + sliceAngle / 2 + rotationAngle;
+    const labelRadius = maxRadius + 30;
+
+    const x = centerX + labelRadius * Math.cos(midAngle);
+    const y = centerY + labelRadius * Math.sin(midAngle);
+
+    // Calculate rotation for label to follow circle
+    let rotation = (midAngle * 180 / Math.PI) + 90;
+
+    // Flip text on left side so it's readable
+    if (midAngle > Math.PI / 2 && midAngle < Math.PI * 1.5) {
+      rotation += 180;
+    }
+
+    const label = new Konva.Text({
+      x: x,
+      y: y,
+      text: CONFIG.categoryLabels[category],
+      fontSize: 12,
+      fontFamily: 'Arial',
+      fontStyle: 'bold',
+      fill: '#076C98',
+      align: 'center',
+      offsetX: 40,
+      offsetY: 10,
+      rotation: rotation
+    });
+
+    labelLayer.add(label);
+  }
+
+  // Draw value labels if enabled
+  if (showValues) {
+    const scores = getValues('scoreInputs');
+    drawValueLabels(scores);
+  }
+
+  labelLayer.batchDraw();
+}
+
+function drawValueLabels(scores) {
+  const { centerX, centerY, layerThickness, sliceAngle, rotationAngle } = getChartGeometry();
+
+  // Position in gap between 3rd and 4th rings
+  const thirdRingOuter = (CONFIG.centerHole + 3 * (CONFIG.ringThickness + CONFIG.gapThickness)) * layerThickness;
+  let gapCenterRadius = thirdRingOuter * (valueDistancePercent / 100);
+
+  for (let category = 0; category < CONFIG.numCategories; category++) {
+    const angle = category * sliceAngle + sliceAngle / 2 + rotationAngle + (valueAngleOffset * Math.PI / 180);
+    const x = centerX + gapCenterRadius * Math.cos(angle);
+    const y = centerY + gapCenterRadius * Math.sin(angle);
+
+    const valueText = new Konva.Text({
+      x: x,
+      y: y,
+      text: scores[category].toFixed(1),
+      fontSize: valueFontSize,
+      fontFamily: 'Arial',
+      fontStyle: 'bold',
+      fill: 'white',
+      stroke: 'black',
+      strokeWidth: 1,
+      align: 'center',
+      offsetX: valueFontSize / 2,
+      offsetY: valueFontSize / 2
+    });
+
+    labelLayer.add(valueText);
+  }
+}
+
+// =============================================================================
+// ANIMATION
+// =============================================================================
+
+function animateChart(scores, benchmarks, averages) {
+  if (isAnimating) return;
+  isAnimating = true;
+
+  // First draw the background (instant)
+  drawBackground();
+
+  // Clear data layers
+  scoreLayer.destroyChildren();
+  benchmarkLayer.destroyChildren();
+  averageLayer.destroyChildren();
+  scoreLayer.batchDraw();
+  benchmarkLayer.batchDraw();
+  averageLayer.batchDraw();
+
+  // Animate scores (flower bloom)
+  const animation = new Konva.Animation((frame) => {
+    const elapsed = frame.time;
+    const progress = Math.min(1, elapsed / CONFIG.animationDuration);
+
+    // Easing function (ease-out cubic)
+    const eased = 1 - Math.pow(1 - progress, 3);
+
+    // Draw with current progress
+    if (showBenchmark) {
+      drawBenchmarks(benchmarks, eased);
+    }
+    drawScores(scores, eased);
+    if (showAverage) {
+      drawAverages(averages, eased);
+    }
+
+    if (progress >= 1) {
+      animation.stop();
+      isAnimating = false;
+      drawLabels();
+    }
+  }, scoreLayer);
+
+  animation.start();
+}
+
+function updateChart(animate = false) {
+  const scores = getValues('scoreInputs');
+  const benchmarks = getValues('benchmarkInputs');
+  const averages = getValues('averageInputs');
+
+  if (animate) {
+    animateChart(scores, benchmarks, averages);
+  } else {
+    drawBackground();
+    drawBenchmarks(benchmarks);
+    drawScores(scores);
+    drawAverages(averages);
+    drawLabels();
   }
 }
 
@@ -661,36 +620,24 @@ async function drawChart(
 // INPUT HANDLING
 // =============================================================================
 
-/**
- * Dynamically creates input fields for scores, benchmarks, and averages.
- * Creates 6 number inputs (one per category) in each of 3 sections.
- * Each input triggers chart redraw on change.
- */
 function createInputs() {
-  const sections = ["scoreInputs", "benchmarkInputs", "averageInputs"];
+  const sections = ['scoreInputs', 'benchmarkInputs', 'averageInputs'];
   sections.forEach((sectionId) => {
     const container = document.getElementById(sectionId);
     for (let i = 0; i < 6; i++) {
-      const input = document.createElement("input");
-      input.type = "number";
-      input.min = "0";
-      input.max = "4";
-      input.step = "0.1";
-      input.value = "0";
+      const input = document.createElement('input');
+      input.type = 'number';
+      input.min = '0';
+      input.max = '4';
+      input.step = '0.1';
+      input.value = '0';
       input.placeholder = `${i + 1}`;
-      input.addEventListener("input", updateChart);
+      input.addEventListener('input', () => updateChart(false));
       container.appendChild(input);
     }
   });
 }
 
-/**
- * Retrieves and validates input values from a section.
- * Clamps all values to valid range [0, 4] and handles NaN.
- *
- * @param {string} sectionId - ID of the input container element
- * @returns {number[]} Array of 6 validated numeric values
- */
 function getValues(sectionId) {
   return Array.from(document.querySelectorAll(`#${sectionId} input`)).map(
     (input) => {
@@ -700,190 +647,84 @@ function getValues(sectionId) {
   );
 }
 
-/**
- * Fetches current input values and redraws the chart.
- * Called whenever user input changes.
- */
-async function updateChart() {
-  const scores = getValues("scoreInputs");
-  const benchmarks = getValues("benchmarkInputs");
-  const averages = getValues("averageInputs");
-  await drawChart(ctx, canvasSize, canvasSize, scores, benchmarks, averages);
-}
-
-// =============================================================================
-// VISIBILITY TOGGLES
-// =============================================================================
-
-/**
- * Toggles visibility of chart elements and triggers redraw.
- *
- * @param {string} elementId - ID of the toggle button clicked
- */
 function toggleVisibility(elementId) {
-  if (elementId === "toggleBenchmark") {
+  if (elementId === 'toggleBenchmark') {
     showBenchmark = !showBenchmark;
-  } else if (elementId === "toggleAverage") {
+  } else if (elementId === 'toggleAverage') {
     showAverage = !showAverage;
-  } else if (elementId === "toggleValues") {
+  } else if (elementId === 'toggleValues') {
     showValues = !showValues;
   }
-  updateChart();
+  updateChart(false);
 }
 
-/**
- * Adjusts the vertical position of the SVG overlay.
- *
- * @param {number} offset - Vertical offset in pixels
- */
-function adjustVerticalPosition(offset) {
-  svgVerticalOffset = offset;
-  updateChart();
+function setupValueControls() {
+  const angleInput = document.getElementById('valueAngleOffset');
+  const fontSizeInput = document.getElementById('valueFontSize');
+  const distanceInput = document.getElementById('valueDistance');
+
+  angleInput.addEventListener('input', () => {
+    valueAngleOffset = parseFloat(angleInput.value) || 0;
+    updateChart(false);
+  });
+
+  fontSizeInput.addEventListener('input', () => {
+    valueFontSize = parseFloat(fontSizeInput.value) || 14;
+    updateChart(false);
+  });
+
+  distanceInput.addEventListener('input', () => {
+    valueDistancePercent = parseFloat(distanceInput.value) || 100;
+    updateChart(false);
+  });
 }
 
 // =============================================================================
-// EXPORT FUNCTIONALITY
+// EXPORT (PNG)
 // =============================================================================
 
-/**
- * Exports the chart as three PNG variants:
- * 1. Scores only
- * 2. Scores + Benchmark
- * 3. Scores + Average
- *
- * Each export is named based on user input filename.
- */
-async function exportAsPNG() {
-  const fileName =
-    document.getElementById("fileNameInput").value || "radial-chart";
+function exportAsPNG() {
+  const fileName = document.getElementById('fileNameInput').value || 'radial-chart';
 
-  // Export scores only
-  await exportScenario(fileName, false, false);
-
-  // Export scores + benchmark
-  await exportScenario(`${fileName}_Benchmark`, true, false);
-
-  // Export scores + average
-  await exportScenario(`${fileName}_Average`, false, true);
-}
-
-/**
- * Exports a single chart scenario as a high-resolution PNG.
- *
- * Creates a temporary canvas at 2x the normal resolution for crisp exports.
- * Temporarily modifies visibility flags to create the specific variant,
- * then restores original settings.
- *
- * @param {string} fileName - Name for the downloaded file (without extension)
- * @param {boolean} includeBenchmark - Whether to show benchmark in this export
- * @param {boolean} includeAverage - Whether to show average in this export
- */
-async function exportScenario(fileName, includeBenchmark, includeAverage) {
-  // Create temporary high-resolution canvas for export
-  const tempCanvas = document.createElement("canvas");
-  const tempCtx = tempCanvas.getContext("2d");
-
-  tempCanvas.width = canvasSize * exportScale;
-  tempCanvas.height = canvasSize * exportScale;
-
-  // Get current input values
-  const scores = getValues("scoreInputs");
-  const benchmarks = getValues("benchmarkInputs");
-  const averages = getValues("averageInputs");
-
-  // Save current visibility settings
-  const originalBenchmarkVisibility = showBenchmark;
-  const originalAverageVisibility = showAverage;
-
-  // Apply export-specific visibility
-  showBenchmark = includeBenchmark;
-  showAverage = includeAverage;
-
-  // Render chart at export resolution
-  await drawChart(
-    tempCtx,
-    tempCanvas.width,
-    tempCanvas.height,
-    scores,
-    benchmarks,
-    averages
-  );
-
-  // Restore original visibility settings
-  showBenchmark = originalBenchmarkVisibility;
-  showAverage = originalAverageVisibility;
-
-  // Trigger download
-  const dataURL = tempCanvas.toDataURL("image/png");
-  const link = document.createElement("a");
+  // Export at higher resolution
+  const dataURL = stage.toDataURL({ pixelRatio: 3 });
+  const link = document.createElement('a');
   link.download = `${fileName}.png`;
   link.href = dataURL;
   link.click();
 }
 
 // =============================================================================
-// VALUE LABEL CONTROLS
-// =============================================================================
-
-/**
- * Sets up event listeners for value label customization controls.
- * Handles angle offset, font size, and distance percentage inputs.
- */
-function setupValueControls() {
-  const angleInput = document.getElementById('valueAngleOffset');
-  const fontSizeInput = document.getElementById('valueFontSize');
-  const distanceInput = document.getElementById('valueDistance');
-
-  // Angle offset control - rotates all value labels around the chart center
-  angleInput.addEventListener('input', () => {
-    valueAngleOffset = parseFloat(angleInput.value) || 0;
-    updateChart();
-  });
-
-  // Font size control - adjusts text size of value labels
-  fontSizeInput.addEventListener('input', () => {
-    valueFontSize = parseFloat(fontSizeInput.value) || 60;
-    updateChart();
-  });
-
-  // Distance control - moves labels closer to or further from center
-  distanceInput.addEventListener('input', () => {
-    valueDistancePercent = parseFloat(distanceInput.value) || 100;
-    updateChart();
-  });
-}
-
-// =============================================================================
 // INITIALIZATION
 // =============================================================================
 
-/**
- * Initialize the application when DOM is fully loaded.
- * Sets up inputs, renders initial chart, and attaches event listeners.
- */
 window.addEventListener('DOMContentLoaded', () => {
-  // Create dynamic input fields
+  initKonva();
   createInputs();
 
-  // Render initial chart with default values
-  updateChart();
+  // Initial draw with animation
+  updateChart(true);
 
-  // Set up value label controls
   setupValueControls();
 
-  // Attach toggle button event listeners
-  document.getElementById("toggleBenchmark").addEventListener("click", () => {
-    toggleVisibility("toggleBenchmark");
+  // Toggle buttons
+  document.getElementById('toggleBenchmark').addEventListener('click', () => {
+    toggleVisibility('toggleBenchmark');
   });
 
-  document.getElementById("toggleAverage").addEventListener("click", () => {
-    toggleVisibility("toggleAverage");
+  document.getElementById('toggleAverage').addEventListener('click', () => {
+    toggleVisibility('toggleAverage');
   });
 
-  document.getElementById("toggleValues").addEventListener("click", () => {
-    toggleVisibility("toggleValues");
+  document.getElementById('toggleValues').addEventListener('click', () => {
+    toggleVisibility('toggleValues');
   });
 
-  // Attach export button event listener
-  document.getElementById("exportPNG").addEventListener("click", exportAsPNG);
+  // Replay animation button
+  document.getElementById('replayAnimation').addEventListener('click', () => {
+    updateChart(true);
+  });
+
+  // Export button
+  document.getElementById('exportPNG').addEventListener('click', exportAsPNG);
 });
