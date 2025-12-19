@@ -279,11 +279,8 @@ function drawBackground(sliceProgress = null, tierProgress = null) {
     }
   }
 
-  // Draw gap lines with fade-in based on max slice progress
-  const maxProgress = sliceProgress ? Math.max(...sliceProgress) : 1;
-  if (maxProgress > 0.3) {
-    drawGapLines(backgroundLayer, Math.min(1, (maxProgress - 0.3) / 0.7));
-  }
+  // Draw gap lines as solid mask (always full opacity)
+  drawGapLines(backgroundLayer);
 
   backgroundLayer.batchDraw();
 }
@@ -397,9 +394,8 @@ function drawScores(scores, animationProgress = 1) {
     }
   }
 
-  // Draw gap lines on top
-  const maxProgress = isPerSlice ? Math.max(...animationProgress) : animationProgress;
-  drawGapLines(scoreLayer, maxProgress);
+  // Draw gap lines as solid mask (always full opacity)
+  drawGapLines(scoreLayer);
   scoreLayer.batchDraw();
 }
 
