@@ -56,6 +56,7 @@ let tooltip;
 let showBenchmark = true;
 let showAverage = true;
 let showValues = false;
+let showLabels = true;
 let isAnimating = false;
 let gridAnimationRef = null;
 let dataAnimationRef = null;
@@ -310,7 +311,7 @@ function drawGapLines(layer, opacity = 1) {
 }
 
 /**
- * Draw scores with per-slice animation support
+ * Draw scores with per-slice concentric animation (expands from center)
  * @param {number[]} scores - Score values for each category
  * @param {number|number[]} animationProgress - Global progress or per-slice progress array
  */
@@ -320,64 +321,78 @@ function drawScores(scores, animationProgress = 1) {
   const { centerX, centerY, layerThickness, sliceAngle, rotationAngle } = getChartGeometry();
   const isPerSlice = Array.isArray(animationProgress);
 
+  // Calculate the maximum possible radius for scaling
+  const maxTierBounds = getRingBounds(CONFIG.numTiers - 1, layerThickness);
+  const maxPossibleRadius = maxTierBounds.endRadius;
+
   for (let category = 0; category < CONFIG.numCategories; category++) {
-    const baseStartAngle = category * sliceAngle + rotationAngle;
-    const baseEndAngle = (category + 1) * sliceAngle + rotationAngle;
+    const startAngle = category * sliceAngle + rotationAngle;
+    const endAngle = (category + 1) * sliceAngle + rotationAngle;
 
     // Get progress for this slice
     const sliceProgress = isPerSlice ? animationProgress[category] : animationProgress;
     if (sliceProgress <= 0) continue;
 
-    const easedProgress = Easing.easeOutCubic(sliceProgress);
+    // Use exponential easing for smooth concentric expansion
+    const easedProgress = Easing.easeOutExpo(sliceProgress);
 
-    // Animate the angle sweep for visual interest
-    const animatedEndAngle = baseStartAngle + (baseEndAngle - baseStartAngle) * Math.min(1, sliceProgress * 1.5);
+    // Calculate the current maximum radius based on animation progress
+    const currentMaxRadius = maxPossibleRadius * easedProgress;
 
-    const score = scores[category] * easedProgress;
+    const score = scores[category];
 
     for (let tier = 0; tier < CONFIG.numTiers; tier++) {
       const { startRadius, endRadius } = getRingBounds(tier, layerThickness);
 
-      // Calculate filled portion for this tier
+      // Skip this tier if animation hasn't reached it yet
+      if (startRadius > currentMaxRadius) continue;
+
+      // Calculate filled portion for this tier based on score
       const layersFilled = Math.max(0, Math.min(10, Math.floor(score * 10) - tier * 10));
 
       if (layersFilled > 0) {
         const fillRatio = layersFilled / 10;
-        const filledEndRadius = startRadius + (endRadius - startRadius) * fillRatio;
+        const targetEndRadius = startRadius + (endRadius - startRadius) * fillRatio;
 
-        const segment = new Konva.Shape({
-          sceneFunc: createArcPath(centerX, centerY, startRadius, filledEndRadius, baseStartAngle, Math.min(animatedEndAngle, baseEndAngle)),
-          fill: CONFIG.scoreColors[tier],
-          category: category,
-          tier: tier,
-          value: scores[category],
-          type: 'score'
-        });
+        // Clamp the end radius to the current animation radius
+        const animatedEndRadius = Math.min(targetEndRadius, currentMaxRadius);
 
-        // Add hover events
-        segment.on('mouseenter', function(e) {
-          const shape = e.target;
-          document.body.style.cursor = 'pointer';
-          shape.opacity(0.8);
-          scoreLayer.batchDraw();
+        // Only draw if there's something visible
+        if (animatedEndRadius > startRadius) {
+          const segment = new Konva.Shape({
+            sceneFunc: createArcPath(centerX, centerY, startRadius, animatedEndRadius, startAngle, endAngle),
+            fill: CONFIG.scoreColors[tier],
+            category: category,
+            tier: tier,
+            value: scores[category],
+            type: 'score'
+          });
 
-          const pos = stage.getPointerPosition();
-          showTooltip(shape.attrs.category, shape.attrs.tier, shape.attrs.value, 'score', pos.x, pos.y);
-        });
+          // Add hover events
+          segment.on('mouseenter', function(e) {
+            const shape = e.target;
+            document.body.style.cursor = 'pointer';
+            shape.opacity(0.8);
+            scoreLayer.batchDraw();
 
-        segment.on('mouseleave', function(e) {
-          document.body.style.cursor = 'default';
-          e.target.opacity(1);
-          scoreLayer.batchDraw();
-          hideTooltip();
-        });
+            const pos = stage.getPointerPosition();
+            showTooltip(shape.attrs.category, shape.attrs.tier, shape.attrs.value, 'score', pos.x, pos.y);
+          });
 
-        segment.on('mousemove', function(e) {
-          const pos = stage.getPointerPosition();
-          showTooltip(e.target.attrs.category, e.target.attrs.tier, e.target.attrs.value, 'score', pos.x, pos.y);
-        });
+          segment.on('mouseleave', function(e) {
+            document.body.style.cursor = 'default';
+            e.target.opacity(1);
+            scoreLayer.batchDraw();
+            hideTooltip();
+          });
 
-        scoreLayer.add(segment);
+          segment.on('mousemove', function(e) {
+            const pos = stage.getPointerPosition();
+            showTooltip(e.target.attrs.category, e.target.attrs.tier, e.target.attrs.value, 'score', pos.x, pos.y);
+          });
+
+          scoreLayer.add(segment);
+        }
       }
     }
   }
@@ -389,7 +404,7 @@ function drawScores(scores, animationProgress = 1) {
 }
 
 /**
- * Draw benchmarks with per-slice animation support
+ * Draw benchmarks with per-slice concentric animation (expands from center)
  * @param {number[]} benchmarks - Benchmark values for each category
  * @param {number|number[]} animationProgress - Global progress or per-slice progress array
  */
@@ -404,59 +419,75 @@ function drawBenchmarks(benchmarks, animationProgress = 1) {
   const { centerX, centerY, layerThickness, sliceAngle, rotationAngle } = getChartGeometry();
   const isPerSlice = Array.isArray(animationProgress);
 
+  // Calculate the maximum possible radius for scaling
+  const maxTierBounds = getRingBounds(CONFIG.numTiers - 1, layerThickness);
+  const maxPossibleRadius = maxTierBounds.endRadius;
+
   for (let category = 0; category < CONFIG.numCategories; category++) {
-    const baseStartAngle = category * sliceAngle + rotationAngle;
-    const baseEndAngle = (category + 1) * sliceAngle + rotationAngle;
+    const startAngle = category * sliceAngle + rotationAngle;
+    const endAngle = (category + 1) * sliceAngle + rotationAngle;
 
     const sliceProgress = isPerSlice ? animationProgress[category] : animationProgress;
     if (sliceProgress <= 0) continue;
 
-    const easedProgress = Easing.easeOutCubic(sliceProgress);
-    const animatedEndAngle = baseStartAngle + (baseEndAngle - baseStartAngle) * Math.min(1, sliceProgress * 1.5);
+    // Use exponential easing for smooth concentric expansion
+    const easedProgress = Easing.easeOutExpo(sliceProgress);
 
-    const benchmark = benchmarks[category] * easedProgress;
+    // Calculate the current maximum radius based on animation progress
+    const currentMaxRadius = maxPossibleRadius * easedProgress;
+
+    const benchmark = benchmarks[category];
 
     for (let tier = 0; tier < CONFIG.numTiers; tier++) {
       const { startRadius, endRadius } = getRingBounds(tier, layerThickness);
+
+      // Skip this tier if animation hasn't reached it yet
+      if (startRadius > currentMaxRadius) continue;
 
       const layersFilled = Math.max(0, Math.min(10, Math.floor(benchmark * 10) - tier * 10));
 
       if (layersFilled > 0) {
         const fillRatio = layersFilled / 10;
-        const filledEndRadius = startRadius + (endRadius - startRadius) * fillRatio;
+        const targetEndRadius = startRadius + (endRadius - startRadius) * fillRatio;
 
-        const segment = new Konva.Shape({
-          sceneFunc: createArcPath(centerX, centerY, startRadius, filledEndRadius, baseStartAngle, Math.min(animatedEndAngle, baseEndAngle)),
-          fill: CONFIG.benchmarkColor,
-          category: category,
-          tier: tier,
-          value: benchmarks[category],
-          type: 'benchmark'
-        });
+        // Clamp the end radius to the current animation radius
+        const animatedEndRadius = Math.min(targetEndRadius, currentMaxRadius);
 
-        segment.on('mouseenter', function(e) {
-          const shape = e.target;
-          document.body.style.cursor = 'pointer';
-          shape.opacity(0.8);
-          benchmarkLayer.batchDraw();
+        // Only draw if there's something visible
+        if (animatedEndRadius > startRadius) {
+          const segment = new Konva.Shape({
+            sceneFunc: createArcPath(centerX, centerY, startRadius, animatedEndRadius, startAngle, endAngle),
+            fill: CONFIG.benchmarkColor,
+            category: category,
+            tier: tier,
+            value: benchmarks[category],
+            type: 'benchmark'
+          });
 
-          const pos = stage.getPointerPosition();
-          showTooltip(shape.attrs.category, shape.attrs.tier, shape.attrs.value, 'benchmark', pos.x, pos.y);
-        });
+          segment.on('mouseenter', function(e) {
+            const shape = e.target;
+            document.body.style.cursor = 'pointer';
+            shape.opacity(0.8);
+            benchmarkLayer.batchDraw();
 
-        segment.on('mouseleave', function(e) {
-          document.body.style.cursor = 'default';
-          e.target.opacity(1);
-          benchmarkLayer.batchDraw();
-          hideTooltip();
-        });
+            const pos = stage.getPointerPosition();
+            showTooltip(shape.attrs.category, shape.attrs.tier, shape.attrs.value, 'benchmark', pos.x, pos.y);
+          });
 
-        segment.on('mousemove', function(e) {
-          const pos = stage.getPointerPosition();
-          showTooltip(e.target.attrs.category, e.target.attrs.tier, e.target.attrs.value, 'benchmark', pos.x, pos.y);
-        });
+          segment.on('mouseleave', function(e) {
+            document.body.style.cursor = 'default';
+            e.target.opacity(1);
+            benchmarkLayer.batchDraw();
+            hideTooltip();
+          });
 
-        benchmarkLayer.add(segment);
+          segment.on('mousemove', function(e) {
+            const pos = stage.getPointerPosition();
+            showTooltip(e.target.attrs.category, e.target.attrs.tier, e.target.attrs.value, 'benchmark', pos.x, pos.y);
+          });
+
+          benchmarkLayer.add(segment);
+        }
       }
     }
   }
@@ -590,36 +621,39 @@ function drawLabels() {
 
   const { centerX, centerY, maxRadius, sliceAngle, rotationAngle } = getChartGeometry();
 
-  for (let category = 0; category < CONFIG.numCategories; category++) {
-    const midAngle = category * sliceAngle + sliceAngle / 2 + rotationAngle;
-    const labelRadius = maxRadius + 30;
+  // Draw category labels (axis names) if enabled
+  if (showLabels) {
+    for (let category = 0; category < CONFIG.numCategories; category++) {
+      const midAngle = category * sliceAngle + sliceAngle / 2 + rotationAngle;
+      const labelRadius = maxRadius + 30;
 
-    const x = centerX + labelRadius * Math.cos(midAngle);
-    const y = centerY + labelRadius * Math.sin(midAngle);
+      const x = centerX + labelRadius * Math.cos(midAngle);
+      const y = centerY + labelRadius * Math.sin(midAngle);
 
-    // Calculate rotation for label to follow circle
-    let rotation = (midAngle * 180 / Math.PI) + 90;
+      // Calculate rotation for label to follow circle
+      let rotation = (midAngle * 180 / Math.PI) + 90;
 
-    // Flip text on left side so it's readable
-    if (midAngle > Math.PI / 2 && midAngle < Math.PI * 1.5) {
-      rotation += 180;
+      // Flip text on left side so it's readable
+      if (midAngle > Math.PI / 2 && midAngle < Math.PI * 1.5) {
+        rotation += 180;
+      }
+
+      const label = new Konva.Text({
+        x: x,
+        y: y,
+        text: CONFIG.categoryLabels[category],
+        fontSize: 12,
+        fontFamily: 'Arial',
+        fontStyle: 'bold',
+        fill: '#076C98',
+        align: 'center',
+        offsetX: 40,
+        offsetY: 10,
+        rotation: rotation
+      });
+
+      labelLayer.add(label);
     }
-
-    const label = new Konva.Text({
-      x: x,
-      y: y,
-      text: CONFIG.categoryLabels[category],
-      fontSize: 12,
-      fontFamily: 'Arial',
-      fontStyle: 'bold',
-      fill: '#076C98',
-      align: 'center',
-      offsetX: 40,
-      offsetY: 10,
-      rotation: rotation
-    });
-
-    labelLayer.add(label);
   }
 
   // Draw value labels if enabled
@@ -956,6 +990,8 @@ function toggleVisibility(elementId) {
     showAverage = !showAverage;
   } else if (elementId === 'toggleValues') {
     showValues = !showValues;
+  } else if (elementId === 'toggleLabels') {
+    showLabels = !showLabels;
   }
   updateChart(false);
 }
@@ -1020,6 +1056,10 @@ window.addEventListener('DOMContentLoaded', () => {
 
   document.getElementById('toggleValues').addEventListener('click', () => {
     toggleVisibility('toggleValues');
+  });
+
+  document.getElementById('toggleLabels').addEventListener('click', () => {
+    toggleVisibility('toggleLabels');
   });
 
   // Animation control buttons
